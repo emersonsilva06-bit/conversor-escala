@@ -39,7 +39,11 @@ def carregar_legenda(caminho_arquivo):
         return None, f"Erro ao ler o arquivo de legenda: {e}"
 
 def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
-    mapa_excecoes = {'FR': 'FOLG', 'FRD': 'FOLG', 'FA': 'FAGR', 'FPA': 'FOLG', 'EP': 'FOLG', 'T': 'FOLG', 'FE': 'FOLG'}
+    # Adicionado CIPA -> FOLG conforme padrão identificado no novo arquivo
+    mapa_excecoes = {
+        'FR': 'FOLG', 'FRD': 'FOLG', 'FA': 'FAGR', 'FPA': 'FOLG', 
+        'EP': 'FOLG', 'T': 'FOLG', 'FE': 'FOLG', 'CIPA': 'FOLG'
+    }
     codigos_ignorar = ['DSR', 'ATESTADO', 'LICENÇA', 'FERIAS']
     
     arquivos_gerados = []
@@ -54,11 +58,14 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
                 indice_dia_1 = i
                 break
         else:
-            # Limpa sufixos do Pandas (.1, .2) antes de verificar
+            # Limpa sufixos do Pandas (.1, .2) e tenta converter para int para achar '1', '01' ou '1.0'
             col_str = str(col).split('.')[0].strip()
-            if col == 1 or col_str == '1':
-                indice_dia_1 = i
-                break
+            try:
+                if int(col_str) == 1:
+                    indice_dia_1 = i
+                    break
+            except:
+                pass
     
     if indice_dia_1 == -1:
         return 0, ["ERRO CRÍTICO: Não foi possível encontrar a coluna do dia '1'."]
@@ -209,8 +216,13 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                 tem_dia_1 = False
                 for col in df_escala.columns:
                     col_str = str(col).split('.')[0].strip() # Correção aqui também
+                    # Verifica se é data dia 1, ou string '1', ou int 1
                     if isinstance(col, datetime.datetime) and col.day == 1: tem_dia_1 = True
                     elif col_str == '1': tem_dia_1 = True
+                    else:
+                         try:
+                             if int(col_str) == 1: tem_dia_1 = True
+                         except: pass
                 
                 if not tem_dia_1 and indice_cabecalho_bp > 0:
                     linha_dias = df_temp.iloc[indice_cabecalho_bp - 1]
