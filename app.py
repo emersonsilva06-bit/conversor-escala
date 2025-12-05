@@ -93,6 +93,7 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
             bp_int = str(bp).strip()
 
         dados_colaborador = []
+        ultimo_dia_processado = 0 # Variável para controlar a virada do mês
         
         for i in range(indice_dia_1, len(colunas)):
             col_header = colunas[i]
@@ -111,6 +112,12 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
                         break # Se não for número (ex: Total), para
                 
                 if dia_num > 31: break
+
+                # NOVA TRAVA: Se o dia atual for menor que o anterior (ex: 31 -> 1), paramos.
+                if dia_num < ultimo_dia_processado:
+                    break
+                ultimo_dia_processado = dia_num
+
             except:
                 break
 
