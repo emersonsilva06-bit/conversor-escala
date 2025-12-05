@@ -14,7 +14,7 @@ st.title("✈️ Conversor de Escala - Rampa BSB")
 st.markdown("""
 Esta ferramenta transforma a planilha de escala operacional em arquivos TSV para importação no SAP.
 
-**Nota:** O arquivo `Legenda.xlsx` deve estar na mesma pasta deste programa.
+**Nota:** O arquivo `Legenda.xlsx` deve estar na mesma pasta deste programa (no GitHub).
 """)
 
 # --- CONFIGURAÇÃO DO ARQUIVO FIXO ---
@@ -45,7 +45,7 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
     arquivos_gerados = []
     log_erros = []
 
-    # Identificar colunas
+    # Identificar colunas (Lógica robusta)
     colunas = list(df_escala.columns)
     indice_dia_1 = -1
     for i, col in enumerate(colunas):
@@ -54,7 +54,8 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
                 indice_dia_1 = i
                 break
         else:
-            col_str = str(col).replace('.0', '').strip()
+            # Limpa sufixos do Pandas (.1, .2) antes de verificar
+            col_str = str(col).split('.')[0].strip()
             if col == 1 or col_str == '1':
                 indice_dia_1 = i
                 break
@@ -95,11 +96,20 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
         
         for i in range(indice_dia_1, len(colunas)):
             col_header = colunas[i]
+            dia_num = 0
+            
             try:
+                # Lógica CORRIGIDA para duplicatas (ex: 25.1)
                 if isinstance(col_header, datetime.datetime):
                     dia_num = col_header.day
                 else:
-                    dia_num = int(str(col_header).replace('.0', ''))
+                    # Pega apenas a parte antes do ponto (25.1 -> 25)
+                    col_str = str(col_header).split('.')[0].strip()
+                    if col_str.isdigit():
+                        dia_num = int(col_str)
+                    else:
+                        break # Se não for número (ex: Total), para
+                
                 if dia_num > 31: break
             except:
                 break
@@ -145,13 +155,11 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
 
 # --- INTERFACE DO USUÁRIO ---
 
-# Verifica se a legenda existe antes de começar
 if not os.path.exists(ARQUIVO_LEGENDA_FIXO):
     st.error(f"⚠️ Atenção: O arquivo '{ARQUIVO_LEGENDA_FIXO}' não foi encontrado na pasta.")
-    st.info("Por favor, coloque o arquivo de Legenda na mesma pasta onde está este script e recarregue a página.")
+    st.info("Por favor, suba o arquivo Legenda.xlsx no GitHub.")
     st.stop()
 
-# Layout simplificado
 st.subheader("1. Configuração")
 mes_ano = st.text_input("Mês/Ano de Referência (ex: 12/2024)", value="12/2024")
 
@@ -165,17 +173,15 @@ if st.button("🚀 Processar Arquivos", type="primary"):
         st.warning("Por favor, carregue o arquivo de escala.")
     else:
         with st.spinner("Carregando Legenda e processando Escala..."):
-            # 1. Carregar Legenda Automática
+            # 1. Carregar Legenda
             dicionario_legenda, erro_legenda = carregar_legenda(ARQUIVO_LEGENDA_FIXO)
             if erro_legenda:
                 st.error(erro_legenda)
                 st.stop()
             
-            # st.success("Legenda carregada com sucesso!") # Opcional
-
             # 2. Carregar Escala
             try:
-                # Ler arquivo em memória
+                # Ler arquivo em memória para achar o cabeçalho
                 df_temp = pd.read_excel(f_escala, header=None, nrows=20)
                 indice_cabecalho_bp = -1
                 for idx, row in df_temp.iterrows():
@@ -192,10 +198,12 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                 f_escala.seek(0)
                 df_escala = pd.read_excel(f_escala, header=indice_cabecalho_bp)
 
+                # Correção de cabeçalho "Emprestado" da linha de cima
                 tem_dia_1 = False
                 for col in df_escala.columns:
+                    col_str = str(col).split('.')[0].strip() # Correção aqui também
                     if isinstance(col, datetime.datetime) and col.day == 1: tem_dia_1 = True
-                    elif str(col).replace('.0','').strip() == '1': tem_dia_1 = True
+                    elif col_str == '1': tem_dia_1 = True
                 
                 if not tem_dia_1 and indice_cabecalho_bp > 0:
                     linha_dias = df_temp.iloc[indice_cabecalho_bp - 1]
@@ -203,10 +211,15 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                     for i, col_orig in enumerate(df_escala.columns):
                         val_cima = linha_dias.iloc[i]
                         val_final = col_orig
-                        if isinstance(val_cima, datetime.datetime): val_final = val_cima
-                        elif str(val_cima).replace('.0','').strip().isdigit(): 
-                            val_check = int(str(val_cima).replace('.0','').strip())
-                            if 1 <= val_check <= 31: val_final = val_check
+                        
+                        if isinstance(val_cima, datetime.datetime): 
+                            val_final = val_cima
+                        else:
+                            val_str_cima = str(val_cima).split('.')[0].strip() # Correção aqui
+                            if val_str_cima.isdigit(): 
+                                val_check = int(val_str_cima)
+                                if 1 <= val_check <= 31: val_final = val_check
+                        
                         novas_colunas.append(val_final)
                     df_escala.columns = novas_colunas
 
