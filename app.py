@@ -93,7 +93,8 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
     # Mapa de exceções (Tudo em MAIÚSCULO para garantir)
     mapa_excecoes = {
         'FR': 'FOLG', 'FRD': 'FOLG', 'FA': 'FAGR', 'FPA': 'FOLG', 
-        'EP': 'FOLG', 'T': 'FOLG', 'FE': 'FOLG', 'CIPA': 'FOLG'
+        'EP': 'FOLG', 'T': 'FOLG', 'FE': 'FOLG', 'CIPA': 'FOLG',
+        'INSS': 'FOLG', 'AUD': 'FOLG'
     }
     codigos_ignorar = ['DSR', 'ATESTADO', 'LICENÇA', 'FERIAS']
     
