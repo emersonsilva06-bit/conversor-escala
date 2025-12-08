@@ -38,16 +38,19 @@ def carregar_legenda(caminho_arquivo):
     except Exception as e:
         return None, f"Erro ao ler o arquivo de legenda: {e}"
 
-def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
-    # Adicionado CIPA -> FOLG conforme padrão identificado no novo arquivo
+def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_saida):
     mapa_excecoes = {
         'FR': 'FOLG', 'FRD': 'FOLG', 'FA': 'FAGR', 'FPA': 'FOLG', 
         'EP': 'FOLG', 'T': 'FOLG', 'FE': 'FOLG', 'CIPA': 'FOLG'
     }
     codigos_ignorar = ['DSR', 'ATESTADO', 'LICENÇA', 'FERIAS']
     
-    arquivos_gerados = []
+    arquivos_gerados = 0
+    colaboradores_processados = 0
     log_erros = []
+    
+    # Lista acumuladora para o modo consolidado
+    dados_todos_consolidado = []
 
     # Identificar colunas (Lógica robusta)
     colunas = list(df_escala.columns)
@@ -58,7 +61,6 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
                 indice_dia_1 = i
                 break
         else:
-            # Limpa sufixos do Pandas (.1, .2) e tenta converter para int para achar '1', '01' ou '1.0'
             col_str = str(col).split('.')[0].strip()
             try:
                 if int(col_str) == 1:
@@ -68,10 +70,9 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
                 pass
     
     if indice_dia_1 == -1:
-        return 0, ["ERRO CRÍTICO: Não foi possível encontrar a coluna do dia '1'."]
+        return 0, 0, ["ERRO CRÍTICO: Não foi possível encontrar a coluna do dia '1'."]
 
     # Processamento
-    count_sucesso = 0
     barra_progresso = st.progress(0)
     total_linhas = len(df_escala)
 
@@ -100,29 +101,24 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
             bp_int = str(bp).strip()
 
         dados_colaborador = []
-        ultimo_dia_processado = 0 # Variável para controlar a virada do mês
+        ultimo_dia_processado = 0
         
         for i in range(indice_dia_1, len(colunas)):
             col_header = colunas[i]
             dia_num = 0
             
             try:
-                # Lógica CORRIGIDA para duplicatas (ex: 25.1)
                 if isinstance(col_header, datetime.datetime):
                     dia_num = col_header.day
                 else:
-                    # Pega apenas a parte antes do ponto (25.1 -> 25)
                     col_str = str(col_header).split('.')[0].strip()
                     if col_str.isdigit():
                         dia_num = int(col_str)
                     else:
-                        break # Se não for número (ex: Total), para
+                        break 
                 
                 if dia_num > 31: break
-
-                # NOVA TRAVA: Se o dia atual for menor que o anterior (ex: 31 -> 1), paramos.
-                if dia_num < ultimo_dia_processado:
-                    break
+                if dia_num < ultimo_dia_processado: break
                 ultimo_dia_processado = dia_num
 
             except:
@@ -152,20 +148,36 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir):
                 except:
                     pass
 
+        # Lógica de Salvamento dependendo do formato escolhido
         if dados_colaborador:
-            nome_limpo = limpar_nome_arquivo(nome).strip()
-            nome_arquivo = f"{bp_int}_{nome_limpo}.tsv"
-            caminho_completo = os.path.join(temp_dir, nome_arquivo)
+            colaboradores_processados += 1
             
-            df_saida = pd.DataFrame(dados_colaborador)
-            df_saida.to_csv(caminho_completo, sep='\t', header=False, index=False)
-            count_sucesso += 1
+            if formato_saida == "Arquivos Individuais (ZIP)":
+                # Salva um arquivo por pessoa
+                nome_limpo = limpar_nome_arquivo(nome).strip()
+                nome_arquivo = f"{bp_int}_{nome_limpo}.tsv"
+                caminho_completo = os.path.join(temp_dir, nome_arquivo)
+                
+                df_saida = pd.DataFrame(dados_colaborador)
+                df_saida.to_csv(caminho_completo, sep='\t', header=False, index=False)
+                arquivos_gerados += 1
+            else:
+                # Acumula na lista geral
+                dados_todos_consolidado.extend(dados_colaborador)
         else:
             if horario_padrao not in dicionario_legenda:
                  log_erros.append(f"BP {bp_int} ({nome}): Sem dados gerados. Horário '{horario_padrao}' não achado na legenda.")
 
+    # Se for consolidado, salva o arquivo único no final
+    if formato_saida == "Arquivo Único (Consolidado)" and dados_todos_consolidado:
+        nome_arquivo_consol = f"CONSOLIDADO_IMPORTACAO_{mes_ano.replace('/','')}.tsv"
+        caminho_completo = os.path.join(temp_dir, nome_arquivo_consol)
+        df_saida = pd.DataFrame(dados_todos_consolidado)
+        df_saida.to_csv(caminho_completo, sep='\t', header=False, index=False)
+        arquivos_gerados = 1 # Gerou 1 arquivo mestre
+
     barra_progresso.progress(100)
-    return count_sucesso, log_erros
+    return arquivos_gerados, colaboradores_processados, log_erros
 
 # --- INTERFACE DO USUÁRIO ---
 
@@ -175,7 +187,16 @@ if not os.path.exists(ARQUIVO_LEGENDA_FIXO):
     st.stop()
 
 st.subheader("1. Configuração")
-mes_ano = st.text_input("Mês/Ano de Referência (ex: 12/2024)", value="12/2024")
+col_conf1, col_conf2 = st.columns(2)
+
+with col_conf1:
+    mes_ano = st.text_input("Mês/Ano de Referência", value="12/2024", help="Formato: mm/aaaa")
+
+with col_conf2:
+    formato_saida = st.radio(
+        "Formato de Saída:",
+        ("Arquivos Individuais (ZIP)", "Arquivo Único (Consolidado)")
+    )
 
 st.subheader("2. Upload da Escala")
 f_escala = st.file_uploader("Carregar arquivo de Escala (.xlsx)", type=['xlsx'])
@@ -193,9 +214,8 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                 st.error(erro_legenda)
                 st.stop()
             
-            # 2. Carregar Escala
+            # 2. Carregar Escala (Busca inteligente de cabeçalho)
             try:
-                # Ler arquivo em memória para achar o cabeçalho
                 df_temp = pd.read_excel(f_escala, header=None, nrows=20)
                 indice_cabecalho_bp = -1
                 for idx, row in df_temp.iterrows():
@@ -212,11 +232,9 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                 f_escala.seek(0)
                 df_escala = pd.read_excel(f_escala, header=indice_cabecalho_bp)
 
-                # Correção de cabeçalho "Emprestado" da linha de cima
                 tem_dia_1 = False
                 for col in df_escala.columns:
-                    col_str = str(col).split('.')[0].strip() # Correção aqui também
-                    # Verifica se é data dia 1, ou string '1', ou int 1
+                    col_str = str(col).split('.')[0].strip()
                     if isinstance(col, datetime.datetime) and col.day == 1: tem_dia_1 = True
                     elif col_str == '1': tem_dia_1 = True
                     else:
@@ -234,7 +252,7 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                         if isinstance(val_cima, datetime.datetime): 
                             val_final = val_cima
                         else:
-                            val_str_cima = str(val_cima).split('.')[0].strip() # Correção aqui
+                            val_str_cima = str(val_cima).split('.')[0].strip()
                             if val_str_cima.isdigit(): 
                                 val_check = int(val_str_cima)
                                 if 1 <= val_check <= 31: val_final = val_check
@@ -248,20 +266,37 @@ if st.button("🚀 Processar Arquivos", type="primary"):
 
             # 3. Processar
             with tempfile.TemporaryDirectory() as tmpdirname:
-                sucessos, erros = processar_dados(df_escala, dicionario_legenda, mes_ano, tmpdirname)
+                # Passamos a nova variável 'formato_saida' para a função
+                qtd_arquivos, qtd_colaboradores, erros = processar_dados(df_escala, dicionario_legenda, mes_ano, tmpdirname, formato_saida)
                 
-                if sucessos > 0:
-                    shutil.make_archive(os.path.join(tmpdirname, 'arquivos_importacao'), 'zip', tmpdirname)
+                if qtd_arquivos > 0:
+                    st.balloons()
                     
-                    with open(os.path.join(tmpdirname, 'arquivos_importacao.zip'), "rb") as f:
-                        st.balloons()
-                        st.success(f"Sucesso! {sucessos} arquivos gerados.")
-                        st.download_button(
-                            label="📥 Baixar Arquivos (ZIP)",
-                            data=f,
-                            file_name=f"importacao_sap_{mes_ano.replace('/','')}.zip",
-                            mime="application/zip"
-                        )
+                    if formato_saida == "Arquivos Individuais (ZIP)":
+                        st.success(f"Sucesso! {qtd_arquivos} arquivos gerados para {qtd_colaboradores} colaboradores.")
+                        shutil.make_archive(os.path.join(tmpdirname, 'arquivos_importacao'), 'zip', tmpdirname)
+                        
+                        with open(os.path.join(tmpdirname, 'arquivos_importacao.zip'), "rb") as f:
+                            st.download_button(
+                                label="📥 Baixar Arquivos (ZIP)",
+                                data=f,
+                                file_name=f"importacao_sap_{mes_ano.replace('/','')}.zip",
+                                mime="application/zip"
+                            )
+                    else:
+                        # Modo Consolidado: Baixa apenas o arquivo TSV único
+                        st.success(f"Sucesso! Arquivo consolidado gerado contendo {qtd_colaboradores} colaboradores.")
+                        nome_consol = f"CONSOLIDADO_IMPORTACAO_{mes_ano.replace('/','')}.tsv"
+                        caminho_consol = os.path.join(tmpdirname, nome_consol)
+                        
+                        with open(caminho_consol, "rb") as f:
+                            st.download_button(
+                                label="📥 Baixar Arquivo Único (TSV)",
+                                data=f,
+                                file_name=nome_consol,
+                                mime="text/tab-separated-values"
+                            )
+
                 else:
                     st.warning("Nenhum arquivo foi gerado.")
 
@@ -269,3 +304,4 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                     with st.expander("Ver Logs / Avisos"):
                         for e in erros:
                             st.write(e)
+
