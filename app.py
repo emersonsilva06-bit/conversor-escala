@@ -179,11 +179,19 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
             except:
                 continue
 
-            valor_celula = row[colunas[i]]
+            # CORREÇÃO AQUI: Usar iloc para pegar pelo índice da coluna, evitando erro de nomes duplicados
+            valor_celula = row.iloc[i] 
+            
             codigo_final = None
             valor_str = ""
-            if not pd.isna(valor_celula):
-                valor_str = str(valor_celula).strip().upper()
+            
+            # Verificação segura de NA
+            try:
+                if not pd.isna(valor_celula):
+                    valor_str = str(valor_celula).strip().upper()
+            except:
+                # Se der erro na verificação (ex: array numpy), ignora
+                continue
 
             # Lógica de Decisão
             if valor_str == "":
@@ -414,4 +422,5 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                     with st.expander("Ver Logs de Erros e Dias Pulados"):
                         for e in todos_erros:
                             st.write(e)
+
 
