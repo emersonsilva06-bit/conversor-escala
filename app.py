@@ -271,7 +271,7 @@ st.subheader("1. Configuração")
 col_conf1, col_conf2 = st.columns(2)
 
 with col_conf1:
-    mes_ano = st.text_input("Mês/Ano de Referência", value="12/2024", help="Formato: mm/aaaa")
+    mes_ano = st.text_input("Mês/Ano de Referência", value="12/2025", help="Formato: mm/aaaa")
 
 with col_conf2:
     formato_saida = st.radio(
@@ -438,5 +438,6 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                     with st.expander("Ver Logs de Erros e Dias Pulados"):
                         for e in todos_erros:
                             st.write(e)
+
 
 
