@@ -90,6 +90,15 @@ def corrigir_colunas_datas(df, df_raw_header, indice_cabecalho):
     return df
 
 def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_saida, nome_aba_grupo=""):
+    # --- FILTRO DE STATUS (NOVO) ---
+    # Verifica se existe coluna STATUS e filtra apenas ATIVO
+    colunas_map = {str(c).strip().upper(): c for c in df_escala.columns}
+    if 'STATUS' in colunas_map:
+        col_status_real = colunas_map['STATUS']
+        # Filtra mantendo apenas ATIVO (ignorando maiúsculas/minúsculas e espaços)
+        df_escala = df_escala[df_escala[col_status_real].astype(str).str.strip().str.upper() == 'ATIVO']
+    # -------------------------------
+
     # Mapa de exceções (Tudo em MAIÚSCULO para garantir)
     mapa_excecoes = {
         'FR': 'FOLG', 'FRD': 'FOLG', 'FA': 'FAGR', 'FPA': 'FOLG', 
@@ -180,7 +189,7 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
             except:
                 continue
 
-            # CORREÇÃO AQUI: Usar iloc para pegar pelo índice da coluna, evitando erro de nomes duplicados
+            # CORREÇÃO: Usar iloc para pegar pelo índice da coluna
             valor_celula = row.iloc[i] 
             
             codigo_final = None
@@ -191,7 +200,6 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
                 if not pd.isna(valor_celula):
                     valor_str = str(valor_celula).strip().upper()
             except:
-                # Se der erro na verificação (ex: array numpy), ignora
                 continue
 
             # Lógica de Decisão
@@ -234,7 +242,6 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
         
         # Loga erros se houve dias faltando
         if dias_com_erro:
-             # Limita a 3 erros por pessoa para não poluir
              msg_erros = ", ".join(dias_com_erro[:3])
              if len(dias_com_erro) > 3: msg_erros += "..."
              log_erros.append(f"[{nome_aba_grupo}] BP {bp_int}: Dias faltando/pulados: {msg_erros}")
@@ -276,15 +283,11 @@ st.subheader("2. Fonte de Dados")
 fonte_dados = st.radio("Escolha como carregar a escala:", ("Upload de Arquivo (.xlsx)", "Link Google Sheets"))
 
 df_final_dict = {} # Dicionário para guardar {NomeAba: DataFrame}
-modo_google = False
+precisa_buscar_header = False # Flag para ativar busca dinâmica de cabeçalho no loop
 
 if fonte_dados == "Upload de Arquivo (.xlsx)":
     f_escala = st.file_uploader("Carregar arquivo de Escala", type=['xlsx'])
-    if f_escala:
-        df_final_dict["Geral"] = f_escala # Guarda o arquivo para processamento padrão
-
 else:
-    modo_google = True
     url_gsheets = st.text_input("Cole o Link do Google Sheets aqui:")
     st.info(f"O sistema irá buscar automaticamente as abas: {', '.join(ABAS_ALVO)}")
 
@@ -311,18 +314,15 @@ if st.button("🚀 Processar Arquivos", type="primary"):
             # 2. Preparar DataFrames (Upload vs Google)
             dict_dfs_para_processar = {}
 
-            if modo_google:
+            if fonte_dados == "Link Google Sheets":
                 sheet_id = extrair_id_google_sheets(url_gsheets)
                 if not sheet_id:
-                    st.error("Link do Google Sheets inválido. Certifique-se de copiar o link completo.")
+                    st.error("Link do Google Sheets inválido.")
                     st.stop()
                 
                 url_export = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
                 try:
-                    # Lê todas as abas do Google Sheets
                     dfs_google = pd.read_excel(url_export, sheet_name=None)
-                    
-                    # Filtra apenas as abas desejadas
                     abas_encontradas = []
                     for aba in ABAS_ALVO:
                         if aba in dfs_google:
@@ -330,64 +330,79 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                             abas_encontradas.append(aba)
                     
                     if not abas_encontradas:
-                        st.error(f"Não encontrei nenhuma das abas obrigatórias no link fornecido. Abas procuradas: {ABAS_ALVO}")
+                        st.error(f"Não encontrei nenhuma das abas obrigatórias: {ABAS_ALVO}")
                         st.stop()
                     else:
                         st.success(f"Abas encontradas: {', '.join(abas_encontradas)}")
+                    
+                    precisa_buscar_header = True
 
                 except Exception as e:
-                    st.error(f"Erro ao ler Google Sheets. Verifique se a planilha está compartilhada como 'Qualquer pessoa com o link'. Detalhe: {e}")
+                    st.error(f"Erro ao ler Google Sheets: {e}")
                     st.stop()
             else:
-                # Modo Upload (Arquivo Único / Aba Padrão)
+                # Modo Upload: Verifica se tem abas ou arquivo único
                 try:
-                    # Lê para achar cabeçalho
-                    df_temp = pd.read_excel(f_escala, header=None, nrows=20)
-                    idx_header = buscar_cabecalho_inteligente(df_temp)
+                    xls = pd.ExcelFile(f_escala)
+                    abas_presentes = [aba for aba in ABAS_ALVO if aba in xls.sheet_names]
                     
-                    if idx_header == -1:
-                        st.error("Não encontrei a coluna 'BP' nas primeiras 20 linhas do arquivo enviado.")
-                        st.stop()
-                    
-                    f_escala.seek(0)
-                    df_loaded = pd.read_excel(f_escala, header=idx_header)
-                    # Aplica correção de colunas
-                    df_loaded = corrigir_colunas_datas(df_loaded, df_temp, idx_header)
-                    
-                    dict_dfs_para_processar["Arquivo_Upload"] = df_loaded
+                    if abas_presentes:
+                        # Modo Multi-Abas (Igual Google Sheets)
+                        st.success(f"Abas encontradas no arquivo: {', '.join(abas_presentes)}")
+                        for aba in abas_presentes:
+                            dict_dfs_para_processar[aba] = pd.read_excel(f_escala, sheet_name=aba)
+                        precisa_buscar_header = True
+                    else:
+                        # Modo Aba Única (Legado)
+                        df_temp = pd.read_excel(f_escala, header=None, nrows=20)
+                        idx_header = buscar_cabecalho_inteligente(df_temp)
+                        
+                        if idx_header == -1:
+                            st.error("Não encontrei a coluna 'BP' nas primeiras 20 linhas.")
+                            st.stop()
+                        
+                        f_escala.seek(0)
+                        df_loaded = pd.read_excel(f_escala, header=idx_header)
+                        df_loaded = corrigir_colunas_datas(df_loaded, df_temp, idx_header)
+                        dict_dfs_para_processar["Arquivo_Upload"] = df_loaded
+                        precisa_buscar_header = False
+
                 except Exception as e:
                     st.error(f"Erro ao ler arquivo de upload: {e}")
                     st.stop()
 
-            # 3. Loop de Processamento (Processa cada aba encontrada)
+            # 3. Loop de Processamento
             with tempfile.TemporaryDirectory() as tmpdirname:
                 total_arquivos = 0
                 total_colab = 0
                 todos_erros = []
 
-                # Barra de progresso geral
                 progresso_abas = st.progress(0)
                 total_abas = len(dict_dfs_para_processar)
                 
                 for i, (nome_aba, df_atual) in enumerate(dict_dfs_para_processar.items()):
-                    # Se for modo Google, tenta ajuste fino de cabeçalho
-                    if modo_google:
+                    # Se precisa buscar header (Modo Google ou Upload Multi-abas)
+                    if precisa_buscar_header:
                         try:
                             idx_bp_virtual = -1
+                            # Verifica se o cabeçalho já não está certo
                             if 'BP' not in [str(c).upper().strip() for c in df_atual.columns]:
+                                # Procura BP nas linhas
                                 for idx, row in df_atual.head(20).iterrows():
                                     if any(str(v).strip().upper() == 'BP' for v in row):
                                         idx_bp_virtual = idx
                                         break
                                 
                                 if idx_bp_virtual != -1:
+                                    # Pega a linha do cabeçalho
                                     new_header = df_atual.iloc[idx_bp_virtual]
-                                    df_atual = df_atual[idx_bp_virtual+1:]
+                                    # Ajusta o DF para começar depois do cabeçalho
+                                    df_atual = df_atual[idx_bp_virtual+1:].reset_index(drop=True)
                                     df_atual.columns = new_header
                         except:
                             pass
 
-                    # Processa a aba
+                    # Processa a aba (Com Filtro de STATUS e Lógica de Abas)
                     qtd_arq, qtd_col, erros_aba = processar_dados(df_atual, dicionario_legenda, mes_ano, tmpdirname, formato_saida, nome_aba_grupo=nome_aba)
                     
                     total_arquivos += qtd_arq
@@ -416,7 +431,7 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                             mime="application/zip"
                         )
                 else:
-                    st.warning("Nenhum arquivo foi gerado em nenhuma das abas.")
+                    st.warning("Nenhum arquivo foi gerado.")
 
                 if todos_erros:
                     st.warning("Alguns dias ou colaboradores foram pulados. Veja os detalhes abaixo:")
