@@ -41,7 +41,8 @@ def carregar_legenda(caminho_arquivo):
         
     try:
         df_legenda = pd.read_excel(caminho_arquivo)
-        df_legenda['HORARIO ROSTER'] = df_legenda['HORARIO ROSTER'].astype(str).str.strip()
+        # Normalização TOTAL: String, Strip e Upper
+        df_legenda['HORARIO ROSTER'] = df_legenda['HORARIO ROSTER'].astype(str).str.strip().str.upper()
         df_legenda['CODIGO SAP'] = df_legenda['CODIGO SAP'].astype(str).str.strip()
         return pd.Series(df_legenda['CODIGO SAP'].values, index=df_legenda['HORARIO ROSTER']).to_dict(), None
     except Exception as e:
@@ -89,6 +90,7 @@ def corrigir_colunas_datas(df, df_raw_header, indice_cabecalho):
     return df
 
 def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_saida, nome_aba_grupo=""):
+    # Mapa de exceções (Tudo em MAIÚSCULO para garantir)
     mapa_excecoes = {
         'FR': 'FOLG', 'FRD': 'FOLG', 'FA': 'FAGR', 'FPA': 'FOLG', 
         'EP': 'FOLG', 'T': 'FOLG', 'FE': 'FOLG', 'CIPA': 'FOLG'
@@ -134,7 +136,8 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
                 nome = row['NOME']
             else:
                 nome = f'Colaborador_{index}'
-            horario_padrao = str(row['HORÁRIO']).strip()
+            # Normaliza horário padrão para UPPER
+            horario_padrao = str(row['HORÁRIO']).strip().upper()
         except:
             continue
 
@@ -148,6 +151,7 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
 
         dados_colaborador = []
         ultimo_dia_processado = 0
+        dias_com_erro = [] # Para reportar quais dias falharam
         
         for i in range(indice_dia_1, len(colunas)):
             col_header = colunas[i]
@@ -161,14 +165,19 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
                     if col_str.isdigit():
                         dia_num = int(col_str)
                     else:
-                        break 
+                        # Se não for número, CONTINUA (pula coluna 'Total' ou vazia) em vez de quebrar
+                        continue 
                 
+                # Se o dia for absurdamente grande, para
                 if dia_num > 31: break
+                
+                # Se o dia "voltou" (ex: estava no 31 e veio 1), acabou o mês
                 if dia_num < ultimo_dia_processado: break
+                
                 ultimo_dia_processado = dia_num
 
             except:
-                break
+                continue
 
             valor_celula = row[colunas[i]]
             codigo_final = None
@@ -176,14 +185,19 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
             if not pd.isna(valor_celula):
                 valor_str = str(valor_celula).strip().upper()
 
+            # Lógica de Decisão
             if valor_str == "":
                 codigo_final = dicionario_legenda.get(horario_padrao)
+                if not codigo_final:
+                    dias_com_erro.append(f"Dia {dia_num} (Vazio -> Padrão '{horario_padrao}' não achado)")
             elif valor_str in mapa_excecoes:
                 codigo_final = mapa_excecoes[valor_str]
             elif any(ign in valor_str for ign in codigos_ignorar):
-                continue
+                continue # Ignora intencionalmente
             else:
                 codigo_final = dicionario_legenda.get(valor_str)
+                if not codigo_final:
+                    dias_com_erro.append(f"Dia {dia_num} (Código '{valor_str}' não achado)")
 
             if codigo_final:
                 try:
@@ -199,26 +213,27 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
             colaboradores_processados += 1
             
             if formato_saida == "Arquivos Individuais (ZIP)":
-                # Salva um arquivo por pessoa
                 nome_limpo = limpar_nome_arquivo(nome).strip()
-                # Adiciona o grupo ao nome para evitar duplicidade de nomes iguais em abas diferentes
                 nome_arquivo = f"{bp_int}_{nome_limpo}.tsv"
                 caminho_completo = os.path.join(temp_dir, nome_arquivo)
                 
                 df_saida = pd.DataFrame(dados_colaborador)
-                # Se arquivo já existe (mesma pessoa em outra aba?), sobrescreve ou ignora? Sobrescreve.
                 df_saida.to_csv(caminho_completo, sep='\t', header=False, index=False)
                 arquivos_gerados += 1
             else:
-                # Acumula na lista geral para o consolidado DESTA ABA
                 dados_todos_consolidado.extend(dados_colaborador)
-        else:
-            if horario_padrao not in dicionario_legenda:
-                 log_erros.append(f"[{nome_aba_grupo}] BP {bp_int} ({nome}): Sem dados gerados. Horário '{horario_padrao}' não achado.")
+        
+        # Loga erros se houve dias faltando
+        if dias_com_erro:
+             # Limita a 3 erros por pessoa para não poluir
+             msg_erros = ", ".join(dias_com_erro[:3])
+             if len(dias_com_erro) > 3: msg_erros += "..."
+             log_erros.append(f"[{nome_aba_grupo}] BP {bp_int}: Dias faltando/pulados: {msg_erros}")
+        elif not dados_colaborador:
+             log_erros.append(f"[{nome_aba_grupo}] BP {bp_int}: Nenhum dia gerado.")
 
     # Se for consolidado, salva o arquivo único desta aba no final
     if formato_saida == "Arquivo Único (Consolidado)" and dados_todos_consolidado:
-        # Se tem nome de aba, inclui no arquivo. Se não (upload simples), fica genérico.
         sufixo = f"_{nome_aba_grupo}" if nome_aba_grupo else ""
         nome_arquivo_consol = f"CONSOLIDADO{sufixo}_{mes_ano.replace('/','')}.tsv"
         
@@ -346,37 +361,20 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                 total_abas = len(dict_dfs_para_processar)
                 
                 for i, (nome_aba, df_atual) in enumerate(dict_dfs_para_processar.items()):
-                    # Se for modo Google, precisamos normalizar o cabeçalho de cada aba também
+                    # Se for modo Google, tenta ajuste fino de cabeçalho
                     if modo_google:
                         try:
-                            # Recarrega a aba como 'header=None' para buscar o BP dinamicamente
-                            # Como já temos o DF, vamos tentar achar o header nele mesmo ou converter
-                            # Nota: read_excel(sheet_name=None) já leu com header=0 padrão. 
-                            # Se o BP não estiver na linha 1, precisamos ajustar.
-                            # Simplificação: Vamos assumir que no Google a estrutura é similar. 
-                            # Se falhar, tentamos re-ler buscando BP nas primeiras linhas do DF.
-                            
-                            # Busca onde está o BP neste DataFrame
                             idx_bp_virtual = -1
-                            # Procura nas colunas
-                            if 'BP' in [str(c).upper().strip() for c in df_atual.columns]:
-                                # Cabeçalho já está certo
-                                pass
-                            else:
-                                # Tenta achar 'BP' dentro dos dados
+                            if 'BP' not in [str(c).upper().strip() for c in df_atual.columns]:
                                 for idx, row in df_atual.head(20).iterrows():
                                     if any(str(v).strip().upper() == 'BP' for v in row):
                                         idx_bp_virtual = idx
                                         break
                                 
                                 if idx_bp_virtual != -1:
-                                    # Ajusta o cabeçalho
                                     new_header = df_atual.iloc[idx_bp_virtual]
                                     df_atual = df_atual[idx_bp_virtual+1:]
                                     df_atual.columns = new_header
-                                    # Precisamos re-rodar a correção de datas
-                                    # Como não temos o "df_temp" bruto aqui fácil, usamos o próprio head
-                                    pass # Assume que vai funcionar com a lógica de datas abaixo
                         except:
                             pass
 
@@ -398,7 +396,7 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                     with open(caminho_zip + ".zip", "rb") as f:
                         st.balloons()
                         if formato_saida == "Arquivo Único (Consolidado)":
-                            st.success(f"Sucesso! Gerados {total_arquivos} arquivos consolidados (um por aba).")
+                            st.success(f"Sucesso! Gerados {total_arquivos} arquivos consolidados.")
                         else:
                             st.success(f"Sucesso! Gerados {total_arquivos} arquivos individuais.")
                             
@@ -412,7 +410,8 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                     st.warning("Nenhum arquivo foi gerado em nenhuma das abas.")
 
                 if todos_erros:
-                    with st.expander("Ver Logs / Avisos de Todas as Abas"):
+                    st.warning("Alguns dias ou colaboradores foram pulados. Veja os detalhes abaixo:")
+                    with st.expander("Ver Logs de Erros e Dias Pulados"):
                         for e in todos_erros:
                             st.write(e)
 
