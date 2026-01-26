@@ -97,13 +97,16 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
         col_status_real = colunas_map['STATUS']
         df_escala = df_escala[df_escala[col_status_real].astype(str).str.strip().str.upper() == 'ATIVO']
 
-    # Mapa de exceções
+    # --- CONFIGURAÇÃO DE CÓDIGOS ---
+    
+    # 1. Mapa de exceções (APENAS estes geram códigos especiais de folga/falta)
     mapa_excecoes = {
-        'FR': 'FOLG', 'FRD': 'FOLG', 'FA': 'FAGR', 'FPA': 'FOLG', 
-        'EP': 'FOLG', 'T': 'FOLG', 'FE': 'FOLG', 'CIPA': 'FOLG',
-        'INSS': 'FOLG', 'AUD': 'FOLG'
+        'FR': 'FOLG', 
+        'FRD': 'FOLG', 
+        'FA': 'FAGR'
     }
-    codigos_ignorar = ['DSR', 'ATESTADO', 'LICENÇA', 'FERIAS']
+
+    # OBS: Não existem mais códigos a ignorar. Tudo gera linha.
     
     arquivos_gerados = 0
     colaboradores_processados = 0
@@ -194,18 +197,20 @@ def processar_dados(df_escala, dicionario_legenda, mes_ano, temp_dir, formato_sa
             except:
                 continue
 
-            if valor_str == "":
-                codigo_final = dicionario_legenda.get(horario_padrao)
-                if not codigo_final:
-                    dias_com_erro.append(f"Dia {dia_num} (Vazio -> Padrão '{horario_padrao}' não achado)")
-            elif valor_str in mapa_excecoes:
+            # --- LÓGICA DE DECISÃO ABSOLUTA ---
+            
+            # 1. Se for EXCEÇÃO (FR, FRD, FA) -> Usa o código de folga/falta
+            if valor_str in mapa_excecoes:
                 codigo_final = mapa_excecoes[valor_str]
-            elif any(ign in valor_str for ign in codigos_ignorar):
-                continue
+            
+            # 2. QUALQUER OUTRA COISA (DSR, FERIAS, ATESTADO, Vazio, Texto) -> Considera Dia Normal
             else:
-                codigo_final = dicionario_legenda.get(valor_str)
+                # Busca o código SAP correspondente ao HORÁRIO PADRÃO do colaborador
+                codigo_final = dicionario_legenda.get(horario_padrao)
+                
                 if not codigo_final:
-                    dias_com_erro.append(f"Dia {dia_num} (Código '{valor_str}' não achado)")
+                    # Só gera erro se não encontrar nem o horário padrão na legenda
+                    dias_com_erro.append(f"Dia {dia_num} (Padrão '{horario_padrao}' não achado na legenda)")
 
             if codigo_final:
                 try:
@@ -276,7 +281,7 @@ st.subheader("1. Configuração")
 col_conf1, col_conf2 = st.columns(2)
 
 with col_conf1:
-    mes_ano = st.text_input("Mês/Ano de Referência", value="01/2026", help="Formato: mm/aaaa")
+    mes_ano = st.text_input("Mês/Ano de Referência", value="02/2026", help="Formato: mm/aaaa")
 
 with col_conf2:
     formato_saida = st.radio(
@@ -413,8 +418,7 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                     nome_zip = f"importacao_sap_{mes_ano.replace('/','')}.zip"
                     caminho_zip = os.path.join(tmpdirname, 'arquivos_importacao')
                     
-                    # Como agora o consolidado gera MÚLTIPLOS arquivos (Parts),
-                    # A melhor forma de entregar é SEMPRE via ZIP.
+                    # Gera ZIP
                     shutil.make_archive(caminho_zip, 'zip', tmpdirname)
                     
                     with open(caminho_zip + ".zip", "rb") as f:
@@ -436,8 +440,3 @@ if st.button("🚀 Processar Arquivos", type="primary"):
                     with st.expander("Ver Logs de Erros e Dias Pulados"):
                         for e in todos_erros:
                             st.write(e)
-
-
-
-
-
